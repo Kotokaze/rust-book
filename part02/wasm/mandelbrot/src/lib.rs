@@ -1,6 +1,9 @@
+mod logic;
 mod utils;
 
 use wasm_bindgen::prelude::*;
+use wasm_bindgen::{Clamped, JsCast};
+use web_sys::ImageData;
 
 // When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
 // allocator.
@@ -9,11 +12,83 @@ use wasm_bindgen::prelude::*;
 static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 
 #[wasm_bindgen]
-extern {
-    fn alert(s: &str);
+extern "C" {
+    #[wasm_bindgen(js_namespace = console)]
+    fn log(a: &str);
+}
+
+macro_rules! console_log {
+    ($($t:tt)*) => { log(&format_args!($($t)*).to_string()) };
+}
+
+macro_rules! measure_elapsed_time {
+    ($t:tt, $s:block) => {{
+        let window = web_sys::window().expect("should have window in this context");
+        let performance = window
+            .performance()
+            .expect("performance should be available");
+        let start = performance.now();
+        let result = { $s };
+        let end = performance.now();
+        console_log!("\t{} {}[ms]", $t, (end - start));
+
+        result
+    }};
 }
 
 #[wasm_bindgen]
-pub fn greet() {
-    alert("Hello, mandelbrot!");
+pub fn generate_mandelbrot_set(
+    canvas_w: usize,
+    canvas_h: usize,
+    x_min: f64,
+    x_max: f64,
+    y_min: f64,
+    y_max: f64,
+    max_iter: usize,
+) -> Vec<u8> {
+    return logic::generate_mandelbrot_set(
+        canvas_w, canvas_h, x_min, x_max, y_min, y_max, max_iter,
+    );
+}
+
+#[wasm_bindgen]
+pub fn draw_mandelbrot_set() {
+    const CANVAS_ID: &str = "canvas_wasm";
+    let document = web_sys::window().unwrap().document().unwrap();
+    let canvas: web_sys::HtmlCanvasElement = document
+        .get_element_by_id(CANVAS_ID)
+        .unwrap()
+        .dyn_into::<web_sys::HtmlCanvasElement>()
+        .map_err(|_| ())
+        .unwrap();
+    let context = canvas
+        .get_context("2d")
+        .unwrap() // Option<Object>
+        .unwrap() // Object
+        .dyn_into::<web_sys::CanvasRenderingContext2d>()
+        .unwrap();
+    let canvas_w: usize = canvas.width() as usize;
+    let canvas_h: usize = canvas.height() as usize;
+
+    const X_MIN: f64 = -1.5;
+    const X_MAX: f64 = 0.5;
+    const Y_MIN: f64 = -1.0;
+    const Y_MAX: f64 = 1.0;
+    const MAX_ITER: usize = 64;
+
+    let mut result = measure_elapsed_time!("generate: wasm\tgeneration_time:", {
+        logic::generate_mandelbrot_set(canvas_w, canvas_h, X_MIN, X_MAX, Y_MIN, Y_MAX, MAX_ITER)
+    });
+
+    return measure_elapsed_time!("draw: wasm\tdrawing_time:", {
+        let data = ImageData::new_with_u8_clamped_array_and_sh(
+            Clamped(&mut result),
+            canvas.width(),
+            canvas.height(),
+        );
+
+        if let Ok(data) = data {
+            let _ = context.put_image_data(&data, 0.0, 0.0);
+        }
+    });
 }
